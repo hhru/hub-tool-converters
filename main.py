@@ -1,10 +1,38 @@
 import argparse
+from dataclasses import dataclass
+from typing import Optional
 
 from config.constances import PARSER_CLASSES
 from config.enums import SourceTypes, BuildTool, Stage
 from hub.parsers.hub_parser import HubParser
 from utils import check_keys_parser_classes, validate_args
 
+
+@dataclass
+class Argument:
+    type: str
+    scanner: str
+    format: Optional[str] = None
+    filename: Optional[str] = None
+    output: Optional[str] = None
+    name: Optional[str] = None
+    url: Optional[str] = None
+    branch: Optional[str] = None
+    commit: Optional[str] = None
+    build_tool: Optional[str] = None
+    stage: Optional[str] = None
+
+class Converter:
+    def __init__(self, args: Argument):
+        validate_args(args)
+        parser = PARSER_CLASSES[args.format]()
+
+        with open(args.filename, "r", encoding='utf-8') as f:
+            results = parser.get_findings(f, '')
+
+        hub_parser = HubParser(args=args, results=results)
+        hub_parser.parse()
+        hub_parser.save()
 
 def _prepare_choice(choices):
     fixed_choices = list()
@@ -78,8 +106,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "-c", "--commit",
         type=str,
-        help="AppSec.Hub repository's commit (default: master)",
-        default="master"
+        help="AppSec.Hub repository's commit"
     )
     parser.add_argument(
         "-bt", "--build-tool",
@@ -94,6 +121,14 @@ if __name__ == '__main__':
         choices=Stage.__members__.keys(),
         help="Stage of instance",
         required=False
+    )
+    parser.add_argument(
+        "--report-version",
+        type=str,
+        choices=["1.0.1", "1.0.2"],
+        help="AppSec.Hub report schema version (default: 1.0.1)",
+        default="1.0.1",
+        dest="report_version"
     )
 
     args = parser.parse_args()

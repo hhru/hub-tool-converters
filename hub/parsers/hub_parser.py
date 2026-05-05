@@ -1,10 +1,11 @@
 import json
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from config.enums import SourceTypes, ScannerTypes
+from config.constances import PARSERS_NAMES_TO_FIX
 from converters.models import Finding
-from hub.models.hub import ScanResult, Scan, ScanDetail, Report, FindingHubSast, FindingHubDast, FindingHubScaS
+from hub.models.hub import ScanResult, Scan, ScanDetail, Report, FindingHubSast, FindingHubDast, FindingHubScaS, HttpMessage
 from hub.models.location import LocationSast, LocationDast, LocationSca, LocationStack
 from hub.models.rule import Rule, RuleCwe, RuleSCA
 from hub.models.source import SourceSast, SourceDast, SourceArtifact
@@ -18,6 +19,7 @@ class HubParser:
         self.results = results
 
         self.args = args
+        self.report_version = getattr(args, 'report_version', '1.0.1')
         self.__create_source()
 
         self.rules: dict[str, Rule] = {}
@@ -60,28 +62,57 @@ class HubParser:
 
     def __parse_reqresps(self, finding: Finding):
         """
-        Save request and responses in descriptions
+        Save request and responses.
+        For v1.0.2: populate structured httpRequest/httpResponse on DAST findings.
+        For v1.0.1: append to description as before.
         """
-        if hasattr(finding, "unsaved_req_resp") and isinstance(finding.unsaved_req_resp, list):
+        if not hasattr(finding, "unsaved_req_resp") or not isinstance(finding.unsaved_req_resp, list):
+            return
+
+        hub_finding = self.findings.get(finding.dupe_key)
+        if not hub_finding:
+            return
+
+        if (self.report_version == "1.0.2"
+                and isinstance(hub_finding, FindingHubDast)
+                and finding.unsaved_req_resp):
+            # For v1.0.2, use structured httpRequest/httpResponse from first req/resp pair
+            first_rr = finding.unsaved_req_resp[0] if finding.unsaved_req_resp else None
+            if first_rr and isinstance(first_rr, dict):
+                req_raw = first_rr.get("req", "")
+                resp_raw = first_rr.get("resp", "")
+                hub_finding.httpRequest = self.__split_http_message(req_raw)
+                hub_finding.httpResponse = self.__split_http_message(resp_raw)
+
+            # Append remaining req/resp pairs to description
+            for req_resp in finding.unsaved_req_resp[1:]:
+                text = ''
+                if isinstance(req_resp, dict):
+                    for key, value in req_resp.items():
+                        text += f'\n{key}: {value}\n'
+                        text = markdown.markdown(text, extensions=['nl2br']).replace('\n', '')
+                hub_finding.description += text
+        else:
+            # v1.0.1 behavior: append everything to description
             for req_resp in finding.unsaved_req_resp:
                 text = ''
                 if isinstance(req_resp, dict):
                     for key, value in req_resp.items():
                         text += f'\n{key}: {value}\n'
-                self.findings[finding.dupe_key].description += text
+                        text = markdown.markdown(text, extensions=['nl2br']).replace('\n', '')
+                hub_finding.description += text
 
-    def __parse_finding_stacks(self, finding_stacks, location_id) -> Optional[list[LocationStack]]:
-        stacks = []
-        if finding_stacks:
-            for finding_stack in finding_stacks:
-                stacks.append(
-                    LocationStack(
-                        locationId=location_id,
-                        sequence=finding_stack["sequence"],
-                        code=finding_stack["code"],
-                        line=finding_stack["line"]
-                    ))
-            return stacks
+    @staticmethod
+    def __split_http_message(raw: str) -> HttpMessage:
+        """Split raw HTTP message into header and body parts."""
+        if not raw:
+            return HttpMessage(header="", body="")
+        # HTTP messages separate headers from body with double CRLF
+        for separator in ["\r\n\r\n", "\n\n"]:
+            if separator in raw:
+                parts = raw.split(separator, 1)
+                return HttpMessage(header=parts[0], body=parts[1] if len(parts) > 1 else "")
+        return HttpMessage(header=raw, body="")
 
     def __parse_finding(self, finding: Finding):
         scanner_type = self.__get_scanner_type(finding)
@@ -91,11 +122,10 @@ class HubParser:
                 ruleId=finding.ruleId,
                 locationId=finding.file_key,
                 line=finding.line,
-                code=finding.code,
+                code=finding.code[:5000] if isinstance(finding.code, str) else finding.code,
                 description=finding.description,
                 status=self.__get_status(finding),
-                type=scanner_type,
-                stacks=self.__parse_finding_stacks(finding.finding_stacks, finding.file_key)
+                type=scanner_type
             )
 
         elif scanner_type == ScannerTypes.DAST.value:
@@ -113,14 +143,19 @@ class HubParser:
                 idx=finding.dupe_key,
                 ruleId=finding.ruleId,
                 locationId=finding.file_key,
-                description=finding.description,
+                description=f"{finding.description}\n{finding.description_references}" if finding.description_references else finding.description,
                 status=self.__get_status(finding),
                 type=scanner_type
             )
 
         # Markdown to HTML
         if finding_hub.description:
-            finding_hub.description = markdown.markdown(finding_hub.description)
+            if "**Snippet:**\n```" in finding_hub.description:
+                finding_hub.description = finding_hub.description.split("```")
+                description_code = finding_hub.description[1][:5000] if isinstance(finding_hub.description[1], str) else finding_hub.description[1]
+                formatted_snippet = "<pre><code>```" + description_code.replace("\n", "<br>") + "```</code></pre>"
+                finding_hub.description = f'{finding_hub.description[0]}{formatted_snippet}{finding_hub.description[2]}'
+            finding_hub.description = markdown.markdown(finding_hub.description, extensions=['nl2br']).replace('\n', '')
 
         if finding.dupe_key not in self.findings:
             self.findings[finding.dupe_key] = finding_hub
@@ -161,7 +196,10 @@ class HubParser:
                     name=finding.ruleId,
                     severity='Low' if finding.severity == 'Info' else finding.severity,
                     description=finding.description,
-                    cwe=[RuleCwe(idx=finding.cwe)] if finding.cwe else None
+                    cwe=[RuleCwe(idx=finding.cwe)] if finding.cwe else None,
+                    references=finding.references,
+                    cvss3_vector=finding.cvss3_vector,
+                    cvss3_score=finding.cvss3_score
                 )
             else:
                 self.rules[finding.ruleId] = Rule(
@@ -202,6 +240,8 @@ class HubParser:
             finding.check_additional_fields()
 
     def get_report(self) -> dict:
+        if self.args.scanner in PARSERS_NAMES_TO_FIX:
+            self.args.scanner = self.args.scanner.replace("_", "-")
         scan_result = ScanResult(
             rules=list(self.rules.values()),
             locations=list(self.locations.values()),
@@ -217,6 +257,7 @@ class HubParser:
             tool={'product': f"{self.args.scanner}"}
         )
         report = Report(
+            version=self.report_version,
             scans=[scan]
         )
         report = report.to_dict()

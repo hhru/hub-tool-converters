@@ -25,15 +25,16 @@
 | -o; --output      | Путь где будет создан отчет в формате AppSec.HUB                                                                                       | Да                                                    |
 | -n; --name        | Название репозитория в AppSec.Hub/артефакта/инстанса                                                                                   | Да                                                    |
 | -u; --url         | Урл репозитория/артефакта/инстанса                                                                                                     | Да                                                    |
-| --format          | Формат входного файла (bandit, burp, checkov, gitleaks, gosec, horusec, mobsf, sarif, semgrep, spotbugs, trufflehog, svace, cyclonedx) | Нет, по умолчанию взято значение из аргумента scanner |
+| --format          | Формат входного файла (bandit, burp, checkov, gitleaks, gosec, horusec, mobsf, sarif, semgrep, solidpoint, spotbugs, trufflehog, svace, cyclonedx) | Нет, по умолчанию взято значение из аргумента scanner |
 | -b; --branch      | Ветка в репозитории, по которой запускалось сканирование                                                                               | Нет, по умолчанию master                              |
-| -c; --commit      | Коммит в репозитории, по которому запускалось сканирование                                                                             | Нет, по умолчанию master                              |
+| -c; --commit      | Коммит в репозитории, по которому запускалось сканирование                                                                             | Нет                                                   |
 | -bt; --build-tool | Сборщик (--help для просмотра всех сборщиков)                                                                                          | Нет, по умолчанию maven                               |
 | --stage           | Стадия экземпляра (ST - System Test, UAT - User Acceptance Test, IAT - Integration Acceptance Test, STG - Stage, PROD - Production)    | Нет                                                   |
+| --report-version  | Версия формата отчёта AppSec.HUB (1.0.1 или 1.0.2)                                                                                    | Нет, по умолчанию 1.0.1                               |
 
 ### Список поддерживаемых форматов
 
-bandit, burp, checkov, gitleaks, gosec, horusec, mobsf, sarif, semgrep, spotbugs, trufflehog, cyclonedx, kaspersky-cs, svace(только .csv, в формате .sarif запускать через sarif)
+bandit, burp, checkov, gitleaks, gosec, horusec, mobsf, sarif, semgrep, solidpoint, spotbugs, trufflehog, cyclonedx, kaspersky-cs, svace(только .csv, в формате .sarif запускать через sarif)
 
 ## Пример запуска
 
@@ -65,6 +66,11 @@ python main.py -s svace -t CODEBASE --format sarif -f tests/codebase/svace/svace
 python main.py -s kaspersky-cs -t ARTIFACT -f input-file.json -o output-file.json -n artifact_name -u https://artifact-url.rpm
 ```
 
+5. Запуск конвертера для SolidPoint DAST
+```bash
+python main.py -s solidpoint -t INSTANCE -f solidpoint_report.json -o solidpoint_hub.json -n my-app -u https://my-app.example.com --stage ST
+```
+
 ## Запуск тестов
 
 1. Создание виртуального окружения и его активация
@@ -79,7 +85,7 @@ pip install -r requirements.txt
 
 3. Запуск тестов
 ```bash
-python -m unittest tests/parsers.py
+python -m pytest -s
 ```
 
 ## Вносите свой вклад
